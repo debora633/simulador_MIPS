@@ -195,7 +195,7 @@ for instrucao in instrucoes:
     # Mostrar a instrução decodificada no terminal
     print(f"{instrucao} -> {assembly}")
 
-
+# suwghsiuwtguysgdwuydgf
 # =========================================================
 # Salvar os resultados no arquivo saida.json
 # =========================================================
