@@ -56,7 +56,7 @@ for instrucao in instrucoes:
         elif funct == 42:
             assembly = f"slt ${rd}, ${rs}, ${rt}"
         elif funct == 3:
-            ssembly = f"sra ${rd}, ${rt}, {shamt}"
+            assembly = f"sra ${rd}, ${rt}, {shamt}"
         elif funct == 7:
             assembly = f"srav ${rd}, ${rt}, ${rs}"
         elif funct == 2:
