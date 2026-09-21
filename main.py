@@ -6,8 +6,19 @@ with open("entrada.json", "r") as arquivo:
     dados = json.load(arquivo)
 
 
-# Pegar as instruções em hexadecimal
+#pegar as instruções em hexadecimal
 instrucoes = dados["text"]
+
+#inicio registradores 
+regs = {f"${i}": 0 for i in range(32)}
+regs["pc"] = 0
+regs["hi"] = 0
+regs["lo"] = 0
+
+#valores iniciais em config
+if "config" in dados:
+    for reg, valor in dados["config"]["regs"].items():
+        regs[reg] = valor
 
 resultados = []
 
@@ -16,6 +27,8 @@ for instrucao in instrucoes:
     binario = format(numero, "032b")
 
     opcode = int(binario[0:6], 2)
+
+    regs["pc"] += 4
 
     #TIPO R
     if opcode == 0:
@@ -27,34 +40,61 @@ for instrucao in instrucoes:
 
         if funct == 32:
             assembly = f"add ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = regs[f"${rs}"] + regs[f"${rt}"]
         elif funct == 33:
             assembly = f"addu ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = regs[f"${rs}"] + regs[f"${rt}"] ############
         elif funct == 36:
             assembly = f"and ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = regs[f"${rs}"] & regs[f"${rt}"]
         elif funct == 26:
             assembly = f"div ${rs}, ${rt}"
+            val_rs = regs[f"${rs}"] & 0xFFFFFFFF
+            val_rt = regs[f"${rt}"] & 0xFFFFFFFF
+
+            if val_rt != 0:
+                regs["lo"] = val_rs // val_rt 
+                regs["hi"] = val_rs % val_rt
         elif funct == 27:
             assembly = f"divu ${rs}, ${rt}"
         elif funct == 8:
             assembly = f"jr ${rs}"
         elif funct == 16:
             assembly = f"mfhi ${rd}"
+            regs[f"${rd}"] = regs["hi"]
         elif funct == 18:
             assembly = f"mflo ${rd}"
+            regs[f"${rd}"] = regs["lo"]
         elif funct == 24:
             assembly = f"mult ${rs}, ${rt}"
+            resultado_mult = regs[f"${rs}"] * regs[f"${rt}"]
+            regs["lo"] = resultado_mult & 0xFFFFFFFF
+            regs["hi"] = (resultado_mult >> 32) & 0xFFFFFFFF
         elif funct == 25:
             assembly = f"multu ${rs}, ${rt}"
+            val_rs = regs[f"${rs}"] & 0xFFFFFFFF
+            val_rt = regs[f"${rt}"] & 0xFFFFFFFF
+
+            resultado_mult = val_rs * val_rt
+
+            regs["lo"] = resultado_mult & 0xFFFFFFFF
+            regs["hi"] = (resultado_mult >> 32) & 0xFFFFFFFF
         elif funct == 39:
             assembly = f"nor ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = ~(regs[f"${rs}"] | regs[f"${rt}"]) ################
         elif funct == 37:
             assembly = f"or ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = regs[f"${rs}"] | regs[f"${rt}"]
         elif funct == 0:
             assembly = f"sll ${rd}, ${rt}, {shamt}"
         elif funct == 4:
             assembly = f"sllv ${rd}, ${rt}, ${rs}"
         elif funct == 42:
             assembly = f"slt ${rd}, ${rs}, ${rt}"
+            if regs[f"${rs}"] < regs[f"${rt}"]:
+                regs[f"${rd}"] = 1
+            else:
+                regs[f"${rd}"] = 0
         elif funct == 3:
             assembly = f"sra ${rd}, ${rt}, {shamt}"
         elif funct == 7:
@@ -65,10 +105,13 @@ for instrucao in instrucoes:
             assembly = f"srlv ${rd}, ${rt}, ${rs}"
         elif funct == 34:
             assembly = f"sub ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = regs[f"${rs}"] - regs[f"${rt}"]
         elif funct == 35:
             assembly = f"subu ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = regs[f"${rs}"] - regs[f"${rt}"] ###################
         elif funct == 38:
             assembly = f"xor ${rd}, ${rs}, ${rt}"
+            regs[f"${rd}"] = regs[f"${rs}"] ^ regs[f"${rt}"]
         elif funct == 12:
             assembly = "syscall"
 
