@@ -1,480 +1,242 @@
 import json
 
+#valor no intervalo de 32 bits
+def to_32bit_signed(val):
+    val = val & 0xFFFFFFFF
+    if val >= 0x80000000:
+        val -= 0x100000000
+    return val
+
+#ler o arquivo de entrada
 with open("entrada.json", "r") as arquivo:
     dados = json.load(arquivo)
 
-instrucoes = dados["text"]
+#pegar as instruções em hexadecimal
+instrucoes = dados.get("text", [])
 
-# Registradores
-regs = {f"${i}": 0 for i in range(32)}
+#inicio registradores + regs do MARS
+regs = [0] * 32
+regs[28] = 0x10008000  
+regs[29] = 0x7FFFEFFC   
+pc = 0x00400000        
+hi = 0
+lo = 0
 
-regs["pc"] = 0
-regs["hi"] = 0
-regs["lo"] = 0
+#sobrescrever valores iniciais com os valores de 'config.regs'
+config_regs = dados.get("config", {}).get("regs", {})
 
-# Configuração inicial
-if "config" in dados and "regs" in dados["config"]:
-    for reg, valor in dados["config"]["regs"].items():
-        regs[reg] = valor
+#carregar valores iniciaisl dos registradores
+for reg_key, val in config_regs.items():
+    v = int(val, 16) if isinstance(val, str) and val.startswith("0x") else int(val)
+    key_clean = reg_key.replace("$", "").lower()
+
+    if key_clean.isdigit():
+        idx = int(key_clean)
+        if 0 < idx < 32:
+            regs[idx] = to_32bit_signed(v)
+    elif key_clean == "pc":
+        pc = v
+    elif key_clean == "hi":
+        hi = to_32bit_signed(v)
+    elif key_clean == "lo":
+        lo = to_32bit_signed(v)
 
 resultados = []
 
-# Execução
+#execução das instruções
 for instrucao in instrucoes:
-
     numero = int(instrucao, 16)
     binario = format(numero, "032b")
-
     opcode = int(binario[0:6], 2)
+    
+    assembly = ""
 
-    regs["pc"] += 4
-
-    # Tipo R
+    # TIPO R
     if opcode == 0:
-
-        rs = int(binario[6:11], 2)
-        rt = int(binario[11:16], 2)
-        rd = int(binario[16:21], 2)
+        rs    = int(binario[6:11], 2)
+        rt    = int(binario[11:16], 2)
+        rd    = int(binario[16:21], 2)
         shamt = int(binario[21:26], 2)
         funct = int(binario[26:32], 2)
 
-        # ADD
-        if funct == 32:
-
+        if funct == 32:    # add
             assembly = f"add ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rs}"] +
-                regs[f"${rt}"]
-            )
-
-        # ADDU
-        elif funct == 33:
-
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rs] + regs[rt])
+        elif funct == 33:  # addu
             assembly = f"addu ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rs}"] +
-                regs[f"${rt}"]
-            )
-
-        # AND
-        elif funct == 36:
-
-            assembly = f"and ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rs}"] &
-                regs[f"${rt}"]
-            )
-
-        # DIV
-        elif funct == 26:
-
-            assembly = f"div ${rs}, ${rt}"
-
-            val_rs = regs[f"${rs}"]
-            val_rt = regs[f"${rt}"]
-
-            if val_rt != 0:
-                regs["lo"] = val_rs // val_rt
-                regs["hi"] = val_rs % val_rt
-
-        # DIVU
-        elif funct == 27:
-
-            assembly = f"divu ${rs}, ${rt}"
-
-            val_rs = regs[f"${rs}"] & 0xFFFFFFFF
-            val_rt = regs[f"${rt}"] & 0xFFFFFFFF
-
-            if val_rt != 0:
-                regs["lo"] = val_rs // val_rt
-                regs["hi"] = val_rs % val_rt
-
-        # JR
-        elif funct == 8:
-
-            assembly = f"jr ${rs}"
-
-        # MFHI
-        elif funct == 16:
-
-            assembly = f"mfhi ${rd}"
-
-            regs[f"${rd}"] = regs["hi"]
-
-        # MFLO
-        elif funct == 18:
-
-            assembly = f"mflo ${rd}"
-
-            regs[f"${rd}"] = regs["lo"]
-
-        # MULT
-        elif funct == 24:
-
-            assembly = f"mult ${rs}, ${rt}"
-
-            resultado_mult = (
-                regs[f"${rs}"] *
-                regs[f"${rt}"]
-            )
-
-            regs["lo"] = resultado_mult & 0xFFFFFFFF
-            regs["hi"] = (resultado_mult >> 32) & 0xFFFFFFFF
-
-        # MULTU
-        elif funct == 25:
-
-            assembly = f"multu ${rs}, ${rt}"
-
-            val_rs = regs[f"${rs}"] & 0xFFFFFFFF
-            val_rt = regs[f"${rt}"] & 0xFFFFFFFF
-
-            resultado_mult = val_rs * val_rt
-
-            regs["lo"] = resultado_mult & 0xFFFFFFFF
-            regs["hi"] = (resultado_mult >> 32) & 0xFFFFFFFF
-
-        # NOR
-        elif funct == 39:
-
-            assembly = f"nor ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = ~(
-                regs[f"${rs}"] |
-                regs[f"${rt}"]
-            )
-
-        # OR
-        elif funct == 37:
-
-            assembly = f"or ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rs}"] |
-                regs[f"${rt}"]
-            )
-
-        # SLL
-        elif funct == 0:
-
-            assembly = f"sll ${rd}, ${rt}, {shamt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rt}"] << shamt
-            )
-
-        # SLLV
-        elif funct == 4:
-
-            assembly = f"sllv ${rd}, ${rt}, ${rs}"
-
-            deslocamento = regs[f"${rs}"] & 0x1F
-
-            regs[f"${rd}"] = (
-                regs[f"${rt}"] << deslocamento
-            )
-
-        # SLT
-        elif funct == 42:
-
-            assembly = f"slt ${rd}, ${rs}, ${rt}"
-
-            if regs[f"${rs}"] < regs[f"${rt}"]:
-                regs[f"${rd}"] = 1
-            else:
-                regs[f"${rd}"] = 0
-
-        # SRA
-        elif funct == 3:
-
-            assembly = f"sra ${rd}, ${rt}, {shamt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rt}"] >> shamt
-            )
-
-        # SRAV
-        elif funct == 7:
-
-            assembly = f"srav ${rd}, ${rt}, ${rs}"
-
-            deslocamento = regs[f"${rs}"] & 0x1F
-
-            regs[f"${rd}"] = (
-                regs[f"${rt}"] >> deslocamento
-            )
-
-        # SRL
-        elif funct == 2:
-
-            assembly = f"srl ${rd}, ${rt}, {shamt}"
-
-            valor = regs[f"${rt}"] & 0xFFFFFFFF
-
-            regs[f"${rd}"] = valor >> shamt
-
-        # SRLV
-        elif funct == 6:
-
-            assembly = f"srlv ${rd}, ${rt}, ${rs}"
-
-            deslocamento = regs[f"${rs}"] & 0x1F
-
-            valor = regs[f"${rt}"] & 0xFFFFFFFF
-
-            regs[f"${rd}"] = (
-                valor >> deslocamento
-            )
-
-        # SUB
-        elif funct == 34:
-
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rs] + regs[rt])
+        elif funct == 34:  # sub
             assembly = f"sub ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rs}"] -
-                regs[f"${rt}"]
-            )
-
-        # SUBU
-        elif funct == 35:
-
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rs] - regs[rt])
+        elif funct == 35:  # subu
             assembly = f"subu ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rs}"] -
-                regs[f"${rt}"]
-            )
-
-        # XOR
-        elif funct == 38:
-
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rs] - regs[rt])
+        elif funct == 36:  # and
+            assembly = f"and ${rd}, ${rs}, ${rt}"
+            if rd != 0: regs[rd] = regs[rs] & regs[rt]
+        elif funct == 37:  # or
+            assembly = f"or ${rd}, ${rs}, ${rt}"
+            if rd != 0: regs[rd] = regs[rs] | regs[rt]
+        elif funct == 38:  # xor
             assembly = f"xor ${rd}, ${rs}, ${rt}"
-
-            regs[f"${rd}"] = (
-                regs[f"${rs}"] ^
-                regs[f"${rt}"]
-            )
-
-        # SYSCALL
+            if rd != 0: regs[rd] = regs[rs] ^ regs[rt]
+        elif funct == 39:  # nor
+            assembly = f"nor ${rd}, ${rs}, ${rt}"
+            if rd != 0: regs[rd] = to_32bit_signed(~(regs[rs] | regs[rt]))
+        elif funct == 42:  # slt
+            assembly = f"slt ${rd}, ${rs}, ${rt}"
+            if rd != 0: regs[rd] = 1 if regs[rs] < regs[rt] else 0
+        elif funct == 0:   # sll
+            assembly = f"sll ${rd}, ${rt}, {shamt}"
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rt] << shamt)
+        elif funct == 2:   # srl
+            assembly = f"srl ${rd}, ${rt}, {shamt}"
+            u_rt = regs[rt] & 0xFFFFFFFF
+            if rd != 0: regs[rd] = to_32bit_signed(u_rt >> shamt)
+        elif funct == 3:   # sra
+            assembly = f"sra ${rd}, ${rt}, {shamt}"
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rt] >> shamt)
+        elif funct == 4:   # sllv
+            assembly = f"sllv ${rd}, ${rt}, ${rs}"
+            shift = regs[rs] & 0x1F
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rt] << shift)
+        elif funct == 6:   # srlv
+            assembly = f"srlv ${rd}, ${rt}, ${rs}"
+            shift = regs[rs] & 0x1F
+            u_rt = regs[rt] & 0xFFFFFFFF
+            if rd != 0: regs[rd] = to_32bit_signed(u_rt >> shift)
+        elif funct == 7:   # srav
+            assembly = f"srav ${rd}, ${rt}, ${rs}"
+            shift = regs[rs] & 0x1F
+            if rd != 0: regs[rd] = to_32bit_signed(regs[rt] >> shift)
+        elif funct == 16:  # mfhi
+            assembly = f"mfhi ${rd}"
+            if rd != 0: regs[rd] = hi
+        elif funct == 18:  # mflo
+            assembly = f"mflo ${rd}"
+            if rd != 0: regs[rd] = lo
+        elif funct == 24:  # mult
+            assembly = f"mult ${rs}, ${rt}"
+            prod = regs[rs] * regs[rt]
+            lo = to_32bit_signed(prod & 0xFFFFFFFF)
+            hi = to_32bit_signed((prod >> 32) & 0xFFFFFFFF)
+        elif funct == 25:  # multu
+            assembly = f"multu ${rs}, ${rt}"
+            u_rs = regs[rs] & 0xFFFFFFFF
+            u_rt = regs[rt] & 0xFFFFFFFF
+            prod = u_rs * u_rt
+            lo = to_32bit_signed(prod & 0xFFFFFFFF)
+            hi = to_32bit_signed((prod >> 32) & 0xFFFFFFFF)
+        elif funct == 26:  # div
+            assembly = f"div ${rs}, ${rt}"
+            if regs[rt] != 0:
+                lo = to_32bit_signed(int(regs[rs] / regs[rt]))
+                hi = to_32bit_signed(regs[rs] - (lo * regs[rt]))
+        elif funct == 27:  # divu
+            assembly = f"divu ${rs}, ${rt}"
+            u_rs = regs[rs] & 0xFFFFFFFF
+            u_rt = regs[rt] & 0xFFFFFFFF
+            if u_rt != 0:
+                lo = to_32bit_signed(u_rs // u_rt)
+                hi = to_32bit_signed(u_rs % u_rt)
+        elif funct == 8:
+            assembly = f"jr ${rs}"
         elif funct == 12:
-
             assembly = "syscall"
-
         else:
+            assembly = f"instrução desconhecida (funct {funct})"
 
-            assembly = (
-                f"instrução desconhecida "
-                f"(funct {funct})"
-            )
-
-    # Tipo J
+    # TIPO J
     elif opcode == 2:
-
         target = int(binario[6:32], 2)
-
         assembly = f"j {target}"
-
     elif opcode == 3:
-
         target = int(binario[6:32], 2)
-
         assembly = f"jal {target}"
 
-    # Tipo I
+    # TIPO I
     else:
-
         rs = int(binario[6:11], 2)
         rt = int(binario[11:16], 2)
-
         imm_binario = binario[16:32]
 
-        # Imediato com sinal
-        if imm_binario[0] == "1":
+        imm_com_sinal = int(imm_binario, 2) - (2 ** 16) if imm_binario[0] == "1" else int(imm_binario, 2)
+        imm_sem_sinal = int(imm_binario, 2)
 
-            imm_com_sinal = (
-                int(imm_binario, 2) -
-                (2 ** 16)
-            )
-
-        else:
-
-            imm_com_sinal = int(
-                imm_binario,
-                2
-            )
-
-        # Imediato sem sinal
-        imm_sem_sinal = int(
-            imm_binario,
-            2
-        )
-
-        # ADDI
-        if opcode == 8:
-
-            assembly = (
-                f"addi ${rt}, ${rs}, "
-                f"{imm_com_sinal}"
-            )
-
-            regs[f"${rt}"] = (
-                regs[f"${rs}"] +
-                imm_com_sinal
-            )
-
-        # ADDIU
-        elif opcode == 9:
-
-            assembly = (
-                f"addiu ${rt}, ${rs}, "
-                f"{imm_com_sinal}"
-            )
-
-            regs[f"${rt}"] = (
-                regs[f"${rs}"] +
-                imm_com_sinal
-            )
-
-        # SLTI
-        elif opcode == 10:
-
-            assembly = (
-                f"slti ${rt}, ${rs}, "
-                f"{imm_com_sinal}"
-            )
-
-            if regs[f"${rs}"] < imm_com_sinal:
-                regs[f"${rt}"] = 1
-            else:
-                regs[f"${rt}"] = 0
-
-        # ANDI
-        elif opcode == 12:
-
-            assembly = (
-                f"andi ${rt}, ${rs}, "
-                f"{imm_sem_sinal}"
-            )
-
-            regs[f"${rt}"] = (
-                regs[f"${rs}"] &
-                imm_sem_sinal
-            )
-
-        # ORI
-        elif opcode == 13:
-
-            assembly = (
-                f"ori ${rt}, ${rs}, "
-                f"{imm_sem_sinal}"
-            )
-
-            regs[f"${rt}"] = (
-                regs[f"${rs}"] |
-                imm_sem_sinal
-            )
-
-        # XORI
-        elif opcode == 14:
-
-            assembly = (
-                f"xori ${rt}, ${rs}, "
-                f"{imm_sem_sinal}"
-            )
-
-            regs[f"${rt}"] = (
-                regs[f"${rs}"] ^
-                imm_sem_sinal
-            )
-
-        # LUI
-        elif opcode == 15:
-
-            assembly = (
-                f"lui ${rt}, "
-                f"{imm_sem_sinal}"
-            )
-
-            regs[f"${rt}"] = (
-                imm_sem_sinal << 16
-            )
-
-        # BEQ
+        if opcode == 1:
+            if rt == 0:
+                assembly = f"bltz ${rs}, {imm_com_sinal}"
+            elif rt == 1:
+                assembly = f"bgez ${rs}, {imm_com_sinal}"
         elif opcode == 4:
-
-            assembly = (
-                f"beq ${rs}, ${rt}, "
-                f"{imm_com_sinal}"
-            )
-
-        # BNE
+            assembly = f"beq ${rs}, ${rt}, {imm_com_sinal}"
         elif opcode == 5:
-
-            assembly = (
-                f"bne ${rs}, ${rt}, "
-                f"{imm_com_sinal}"
-            )
-
-        # LW
+            assembly = f"bne ${rs}, ${rt}, {imm_com_sinal}"
+        elif opcode == 6:
+            assembly = f"blez ${rs}, {imm_com_sinal}"
+        elif opcode == 7:
+            assembly = f"bgtz ${rs}, {imm_com_sinal}"
+        elif opcode == 8:      # addi
+            assembly = f"addi ${rt}, ${rs}, {imm_com_sinal}"
+            if rt != 0: regs[rt] = to_32bit_signed(regs[rs] + imm_com_sinal)
+        elif opcode == 9:    # addiu
+            assembly = f"addiu ${rt}, ${rs}, {imm_com_sinal}"
+            if rt != 0: regs[rt] = to_32bit_signed(regs[rs] + imm_com_sinal)
+        elif opcode == 10:   # slti
+            assembly = f"slti ${rt}, ${rs}, {imm_com_sinal}"
+            if rt != 0: regs[rt] = 1 if regs[rs] < imm_com_sinal else 0
+        elif opcode == 12:   # andi
+            assembly = f"andi ${rt}, ${rs}, {imm_sem_sinal}"
+            if rt != 0: regs[rt] = regs[rs] & imm_sem_sinal
+        elif opcode == 13:   # ori
+            assembly = f"ori ${rt}, ${rs}, {imm_sem_sinal}"
+            if rt != 0: regs[rt] = regs[rs] | imm_sem_sinal
+        elif opcode == 14:   # xori
+            assembly = f"xori ${rt}, ${rs}, {imm_sem_sinal}"
+            if rt != 0: regs[rt] = regs[rs] ^ imm_sem_sinal
+        elif opcode == 15:   # lui
+            assembly = f"lui ${rt}, {imm_sem_sinal}"
+            if rt != 0: regs[rt] = to_32bit_signed(imm_sem_sinal << 16)
+        elif opcode == 32:
+            assembly = f"lb ${rt}, {imm_com_sinal}(${rs})"
         elif opcode == 35:
-
-            assembly = (
-                f"lw ${rt}, "
-                f"{imm_com_sinal}(${rs})"
-            )
-
-        # SW
+            assembly = f"lw ${rt}, {imm_com_sinal}(${rs})"
+        elif opcode == 36:
+            assembly = f"lbu ${rt}, {imm_com_sinal}(${rs})"
+        elif opcode == 40:
+            assembly = f"sb ${rt}, {imm_com_sinal}(${rs})"
         elif opcode == 43:
-
-            assembly = (
-                f"sw ${rt}, "
-                f"{imm_com_sinal}(${rs})"
-            )
-
+            assembly = f"sw ${rt}, {imm_com_sinal}(${rs})"
         else:
+            assembly = f"instrução desconhecida (opcode {opcode})"
 
-            assembly = (
-                f"instrução desconhecida "
-                f"(opcode {opcode})"
-            )
+    pc += 4
+    regs[0] = 0
 
-    # $0 permanece zero
-    regs["$0"] = 0
-
-    # Registradores diferentes de zero
-    regs_saida = {}
-
-    for reg, valor in regs.items():
-
-        if valor != 0:
-            regs_saida[reg] = valor
+    #montagem do dicionário de registradores diferentes de 0 
+    regs_dicionario = {}
+    for i in range(32):
+        if regs[i] != 0:
+            regs_dicionario[f"${i}"] = regs[i]
+    if hi != 0:
+        regs_dicionario["hi"] = hi
+    if lo != 0:
+        regs_dicionario["lo"] = lo
+    if pc != 0:
+        regs_dicionario["pc"] = pc
 
     resultado = {
         "hex": instrucao,
         "text": assembly,
-        "regs": regs_saida,
+        "regs": regs_dicionario,
         "mem": {},
         "stdout": ""
     }
 
     resultados.append(resultado)
 
-    print(
-        f"{instrucao} -> {assembly}"
-    )
+    print(f"{instrucao} -> {assembly}")
 
-# Salvar saída
+#saída em JSON
 with open("saida.json", "w") as arquivo:
-
-    json.dump(
-        resultados,
-        arquivo,
-        indent=4
-    )
-
-print("\nExecução finalizada!")
-print("Arquivo saida.json criado com sucesso.")
+    json.dump(resultados, arquivo, indent=4)
