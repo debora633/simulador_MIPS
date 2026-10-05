@@ -6,46 +6,52 @@ def to_32bit_signed(val):
         val -= 0x100000000
     return val
 
-# ler o arquivo de entrada - gerenciador de memória (little-endian)
+# Gerenciador de memória orientado a bytes (Little-Endian)
 memoria_global = {}
 
-def read_word(addr):
-    base = addr & 0xFFFFFFFC
-    return memoria_global.get(base, 0)
-
-def write_word(addr, val):
-    base = addr & 0xFFFFFFFC
-    memoria_global[base] = val & 0xFFFFFFFF
-
 def read_byte(addr):
-    word = read_word(addr)
-    offset = addr % 4
-    shift = offset * 8
-    return (word >> shift) & 0xFF
+    return memoria_global.get(addr & 0xFFFFFFFF, 0)
 
 def write_byte(addr, val):
-    word = read_word(addr)
-    offset = addr % 4
-    shift = offset * 8
-    mask = 0xFFFFFFFF ^ (0xFF << shift)
-    new_word = (word & mask) | ((val & 0xFF) << shift)
-    write_word(addr, new_word)
+    addr = addr & 0xFFFFFFFF
+    v = val & 0xFF
+    if v != 0:
+        memoria_global[addr] = v
+    elif addr in memoria_global:
+        del memoria_global[addr]
 
-# carrega o arquivo de entrada JSON
+def read_word(addr):
+    b0 = read_byte(addr)
+    b1 = read_byte(addr + 1)
+    b2 = read_byte(addr + 2)
+    b3 = read_byte(addr + 3)
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+def write_word(addr, val):
+    val = val & 0xFFFFFFFF
+    write_byte(addr, val & 0xFF)
+    write_byte(addr + 1, (val >> 8) & 0xFF)
+    write_byte(addr + 2, (val >> 16) & 0xFF)
+    write_byte(addr + 3, (val >> 24) & 0xFF)
+
+# Carrega o arquivo de entrada JSON
 with open("entrada.json", "r") as arquivo:
     dados = json.load(arquivo)
 
 instrucoes = dados.get("text", [])
-config_regs = dados.get("config", {}).get("regs", {})
+config = dados.get("config", {})
+config_regs = config.get("regs", {})
+config_mem = config.get("mem", {})
 
-# iniciar registradores, PC, HI e LO
+# Iniciar registradores, PC, HI e LO
 regs = [0] * 32
-regs[28] = 0x10008000  
-regs[29] = 0x7FFFEFFC   
-pc = 0x00400000        
+regs[28] = 0x10008000  # $gp
+regs[29] = 0x7FFFEFFC  # $sp
+pc = 0x00400000        # Valor padrão do PC
 hi = 0
 lo = 0
 
+# Inicializa registradores vindos do config
 for reg_key, val in config_regs.items():
     v = int(val, 16) if isinstance(val, str) and val.startswith("0x") else int(val)
     key_clean = reg_key.replace("$", "").lower()
@@ -61,11 +67,21 @@ for reg_key, val in config_regs.items():
     elif key_clean == "lo":
         lo = to_32bit_signed(v)
 
+# Inicializa memória vinda do config
+for mem_addr_str, val in config_mem.items():
+    m_addr = int(mem_addr_str, 16) if str(mem_addr_str).startswith("0x") else int(mem_addr_str)
+    v = int(val, 16) if isinstance(val, str) and str(val).startswith("0x") else int(val)
+    if v > 255 or v < 0:
+        write_word(m_addr, v)
+    else:
+        write_byte(m_addr, v)
+
+start_pc = pc
 resultados = []
 
-# laço principal de execução das instruções
+# Laço principal de execução das instruções
 while True:
-    indice = (pc - 0x00400000) // 4
+    indice = (pc - start_pc) // 4
     
     # Condição de parada: PC aponta para fora da lista de instruções
     if indice < 0 or indice >= len(instrucoes):
@@ -73,10 +89,12 @@ while True:
         
     instrucao = instrucoes[indice]
     numero = int(instrucao, 16)
+    hex_str = f"0x{numero:08x}"
     binario = format(numero, "032b")
     opcode = int(binario[0:6], 2)
     
     assembly = ""
+    stdout_text = ""
     
     # Salva o PC da instrução atual para cálculos relativos e avança 4
     pc_atual = pc
@@ -117,9 +135,14 @@ while True:
         elif funct == 42:  # slt
             assembly = f"slt ${rd}, ${rs}, ${rt}"
             if rd != 0: regs[rd] = 1 if regs[rs] < regs[rt] else 0
+        elif funct == 43:  # sltu
+            assembly = f"sltu ${rd}, ${rs}, ${rt}"
+            u_rs = regs[rs] & 0xFFFFFFFF
+            u_rt = regs[rt] & 0xFFFFFFFF
+            if rd != 0: regs[rd] = 1 if u_rs < u_rt else 0
         elif funct == 0:   # sll
             assembly = f"sll ${rd}, ${rt}, {shamt}"
-            if rd != 0: regs[rd] = to_32bit_signed(regs[rt] << shamt)
+            if rd != 0: regs[rd] = to_32bit_signed((regs[rt] & 0xFFFFFFFF) << shamt)
         elif funct == 2:   # srl
             assembly = f"srl ${rd}, ${rt}, {shamt}"
             u_rt = regs[rt] & 0xFFFFFFFF
@@ -130,7 +153,7 @@ while True:
         elif funct == 4:   # sllv
             assembly = f"sllv ${rd}, ${rt}, ${rs}"
             shift = regs[rs] & 0x1F
-            if rd != 0: regs[rd] = to_32bit_signed(regs[rt] << shift)
+            if rd != 0: regs[rd] = to_32bit_signed((regs[rt] & 0xFFFFFFFF) << shift)
         elif funct == 6:   # srlv
             assembly = f"srlv ${rd}, ${rt}, ${rs}"
             shift = regs[rs] & 0x1F
@@ -149,8 +172,9 @@ while True:
         elif funct == 24:  # mult
             assembly = f"mult ${rs}, ${rt}"
             prod = regs[rs] * regs[rt]
-            lo = to_32bit_signed(prod & 0xFFFFFFFF)
-            hi = to_32bit_signed((prod >> 32) & 0xFFFFFFFF)
+            u_prod = prod & 0xFFFFFFFFFFFFFFFF
+            lo = to_32bit_signed(u_prod & 0xFFFFFFFF)
+            hi = to_32bit_signed((u_prod >> 32) & 0xFFFFFFFF)
         elif funct == 25:  # multu
             assembly = f"multu ${rs}, ${rt}"
             u_rs = regs[rs] & 0xFFFFFFFF
@@ -173,21 +197,36 @@ while True:
         elif funct == 8:   # jr
             assembly = f"jr ${rs}"
             pc = regs[rs]
-        elif funct == 12:
+        elif funct == 12:  # syscall
             assembly = "syscall"
+            v0 = regs[2]
+            if v0 == 1:    # print_int
+                stdout_text = str(regs[4])
+            elif v0 == 4:  # print_string
+                str_bytes = []
+                str_addr = regs[4] & 0xFFFFFFFF
+                while True:
+                    ch = read_byte(str_addr)
+                    if ch == 0:
+                        break
+                    str_bytes.append(chr(ch))
+                    str_addr += 1
+                stdout_text = "".join(str_bytes)
         else:
             assembly = f"instrução desconhecida (funct {funct})"
 
     # Tipo J
     elif opcode == 2:      # j
         target = int(binario[6:32], 2)
-        assembly = f"j {target}"
-        pc = (pc_atual & 0xF0000000) | (target << 2)
+        target_addr = (pc & 0xF0000000) | (target << 2)
+        assembly = f"j {target_addr}"
+        pc = target_addr
     elif opcode == 3:      # jal
         target = int(binario[6:32], 2)
-        assembly = f"jal {target}"
+        target_addr = (pc & 0xF0000000) | (target << 2)
+        assembly = f"jal {target_addr}"
         regs[31] = pc
-        pc = (pc_atual & 0xF0000000) | (target << 2)
+        pc = target_addr
 
     # Tipo I
     else:
@@ -229,6 +268,11 @@ while True:
         elif opcode == 10:   # slti
             assembly = f"slti ${rt}, ${rs}, {imm_com_sinal}"
             if rt != 0: regs[rt] = 1 if regs[rs] < imm_com_sinal else 0
+        elif opcode == 11:   # sltiu
+            assembly = f"sltiu ${rt}, ${rs}, {imm_com_sinal}"
+            u_rs = regs[rs] & 0xFFFFFFFF
+            u_imm = imm_com_sinal & 0xFFFFFFFF
+            if rt != 0: regs[rt] = 1 if u_rs < u_imm else 0
         elif opcode == 12:   # andi
             assembly = f"andi ${rt}, ${rs}, {imm_sem_sinal}"
             if rt != 0: regs[rt] = regs[rs] & imm_sem_sinal
@@ -247,17 +291,35 @@ while True:
             assembly = f"lb ${rt}, {imm_com_sinal}(${rs})"
             if rt != 0: 
                 b = read_byte(end_memoria)
-                b = b - 256 if b >= 128 else b # Extensão de sinal para 8 bits
+                b = b - 256 if b >= 128 else b
                 regs[rt] = to_32bit_signed(b)
+        elif opcode == 33:   # lh
+            assembly = f"lh ${rt}, {imm_com_sinal}(${rs})"
+            if rt != 0:
+                b0 = read_byte(end_memoria)
+                b1 = read_byte(end_memoria + 1)
+                val = b0 | (b1 << 8)
+                val = val - 65536 if val >= 32768 else val
+                regs[rt] = to_32bit_signed(val)
         elif opcode == 35:   # lw
             assembly = f"lw ${rt}, {imm_com_sinal}(${rs})"
             if rt != 0: regs[rt] = to_32bit_signed(read_word(end_memoria))
         elif opcode == 36:   # lbu
             assembly = f"lbu ${rt}, {imm_com_sinal}(${rs})"
-            if rt != 0: regs[rt] = to_32bit_signed(read_byte(end_memoria))
+            if rt != 0: regs[rt] = read_byte(end_memoria) & 0xFF
+        elif opcode == 37:   # lhu
+            assembly = f"lhu ${rt}, {imm_com_sinal}(${rs})"
+            if rt != 0:
+                b0 = read_byte(end_memoria)
+                b1 = read_byte(end_memoria + 1)
+                regs[rt] = (b0 | (b1 << 8)) & 0xFFFF
         elif opcode == 40:   # sb
             assembly = f"sb ${rt}, {imm_com_sinal}(${rs})"
             write_byte(end_memoria, regs[rt])
+        elif opcode == 41:   # sh
+            assembly = f"sh ${rt}, {imm_com_sinal}(${rs})"
+            write_byte(end_memoria, regs[rt] & 0xFF)
+            write_byte(end_memoria + 1, (regs[rt] >> 8) & 0xFF)
         elif opcode == 43:   # sw
             assembly = f"sw ${rt}, {imm_com_sinal}(${rs})"
             write_word(end_memoria, regs[rt])
@@ -274,23 +336,21 @@ while True:
             regs_dicionario[f"${i}"] = regs[i]
     if hi != 0: regs_dicionario["hi"] = hi
     if lo != 0: regs_dicionario["lo"] = lo
-    if pc != 0: regs_dicionario["pc"] = pc
+    regs_dicionario["pc"] = pc
     
-    mem_dicionario = {}
-    for addr, val in memoria_global.items():
-        if val != 0:
-            mem_dicionario[f"0x{addr:08x}"] = to_32bit_signed(val)
+    # Dicionário de memória com endereços decimais ordenados
+    mem_dicionario = {str(k): v for k, v in sorted(memoria_global.items()) if v != 0}
 
     resultado = {
-        "hex": instrucao,
+        "hex": hex_str,
         "text": assembly,
         "regs": regs_dicionario,
         "mem": mem_dicionario,
-        "stdout": ""
+        "stdout": stdout_text
     }
 
     resultados.append(resultado)
-    print(f"{instrucao} -> {assembly}")
+    print(f"{hex_str} -> {assembly}")
 
 # Saída - Salva os resultados em um arquivo JSON
 with open("saida.json", "w") as arquivo:
