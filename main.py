@@ -6,7 +6,7 @@ def to_32bit_signed(val):
         val -= 0x100000000
     return val
 
-# --- GERENCIADOR DE MEMÓRIA (LITTLE ENDIAN) ---
+# ler o arquivo de entrada - gerenciador de memória (little-endian)
 memoria_global = {}
 
 def read_word(addr):
@@ -31,14 +31,14 @@ def write_byte(addr, val):
     new_word = (word & mask) | ((val & 0xFF) << shift)
     write_word(addr, new_word)
 
-# --- CARREGAMENTO DE ARQUIVO ---
+# carrega o arquivo de entrada JSON
 with open("entrada.json", "r") as arquivo:
     dados = json.load(arquivo)
 
 instrucoes = dados.get("text", [])
 config_regs = dados.get("config", {}).get("regs", {})
 
-# --- INICIALIZAÇÃO DE REGISTRADORES ---
+# iniciar registradores, PC, HI e LO
 regs = [0] * 32
 regs[28] = 0x10008000  
 regs[29] = 0x7FFFEFFC   
@@ -63,7 +63,7 @@ for reg_key, val in config_regs.items():
 
 resultados = []
 
-# --- LAÇO DE EXECUÇÃO GUIADO PELO PC ---
+# laço principal de execução das instruções
 while True:
     indice = (pc - 0x00400000) // 4
     
@@ -82,7 +82,7 @@ while True:
     pc_atual = pc
     pc += 4
 
-    # --- TIPO R ---
+    # Tipo R
     if opcode == 0:
         rs    = int(binario[6:11], 2)
         rt    = int(binario[11:16], 2)
@@ -178,7 +178,7 @@ while True:
         else:
             assembly = f"instrução desconhecida (funct {funct})"
 
-    # --- TIPO J ---
+    # Tipo J
     elif opcode == 2:      # j
         target = int(binario[6:32], 2)
         assembly = f"j {target}"
@@ -189,7 +189,7 @@ while True:
         regs[31] = pc
         pc = (pc_atual & 0xF0000000) | (target << 2)
 
-    # --- TIPO I ---
+    # Tipo I
     else:
         rs = int(binario[6:11], 2)
         rt = int(binario[11:16], 2)
@@ -267,7 +267,7 @@ while True:
     # Garante que $0 é sempre 0
     regs[0] = 0
 
-    # --- MONTAGEM DO ESTADO ATUAL ---
+    # Monta o dicionário de registradores e memória para saída
     regs_dicionario = {}
     for i in range(32):
         if regs[i] != 0:
@@ -292,6 +292,6 @@ while True:
     resultados.append(resultado)
     print(f"{instrucao} -> {assembly}")
 
-# --- SAÍDA EM JSON ---
+# Saída - Salva os resultados em um arquivo JSON
 with open("saida.json", "w") as arquivo:
     json.dump(resultados, arquivo, indent=4)
